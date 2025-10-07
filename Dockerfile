@@ -1,110 +1,127 @@
-# ======================================================
-# === WAHA Core - Redis-Free Lightweight Dockerfile ===
-# ======================================================
+# === ARGs ===
+ARG NODE_IMAGE_TAG=22.16-bookworm-slim
+ARG GOLANG_IMAGE_TAG=1.23-bookworm
 
-# ---------------------------
-# 1️⃣ Base build stage
-# ---------------------------
-FROM node:18-alpine AS build
+#
+# ==============================
+# 1️⃣ Build Stage
+# ==============================
+FROM node:${NODE_IMAGE_TAG} AS build
 
 WORKDIR /app
 
-# Copy package files first for caching
-COPY package*.json yarn.lock* ./
+# Enable Corepack and set Yarn to exact version
+RUN npm install -g corepack && corepack enable
+RUN corepack prepare yarn@3.6.3 --activate
 
-# Install dependencies safely
-RUN yarn install --frozen-lockfile
+# Copy package files first
+COPY package.json yarn.lock ./
 
-# Copy the rest of the app
+# Install dependencies safely (Yarn v3)
+RUN yarn install --immutable
+
+# Copy app source
 COPY . .
 
-# Build the WAHA application (if applicable)
-RUN yarn build || echo "⚠️ No build step detected, continuing..."
+# Build the WAHA app
+RUN yarn build && find ./dist -name "*.d.ts" -delete
 
-# ---------------------------
-# 2️⃣ Final runtime image
-# ---------------------------
-FROM node:18-alpine AS release
+#
+# ==============================
+# 2️⃣ Dashboard Stage
+# ==============================
+FROM node:${NODE_IMAGE_TAG} AS dashboard
+
+RUN apt-get update && apt-get install -y jq wget unzip && rm -rf /var/lib/apt/lists/*
+
+COPY waha.config.json /tmp/waha.config.json
+RUN \
+    WAHA_DASHBOARD_GITHUB_REPO=$(jq -r '.waha.dashboard.repo' /tmp/waha.config.json) && \
+    WAHA_DASHBOARD_SHA=$(jq -r '.waha.dashboard.ref' /tmp/waha.config.json) && \
+    wget https://github.com/${WAHA_DASHBOARD_GITHUB_REPO}/archive/${WAHA_DASHBOARD_SHA}.zip && \
+    unzip ${WAHA_DASHBOARD_SHA}.zip -d /tmp/dashboard && \
+    mkdir -p /dashboard && \
+    mv /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}/* /dashboard/ && \
+    rm -rf ${WAHA_DASHBOARD_SHA}.zip /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}
+
+#
+# ==============================
+# 3️⃣ GOWS Stage
+# ==============================
+FROM golang:${GOLANG_IMAGE_TAG} AS gows
+
+RUN apt-get update && apt-get install -y jq protobuf-compiler libvips-dev && rm -rf /var/lib/apt/lists/*
+
+COPY waha.config.json /tmp/waha.config.json
+WORKDIR /go/gows
+RUN \
+    GOWS_GITHUB_REPO=$(jq -r '.waha.gows.repo' /tmp/waha.config.json) && \
+    GOWS_SHA=$(jq -r '.waha.gows.ref' /tmp/waha.config.json) && \
+    ARCH=$(uname -m) && \
+    if [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; elif [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
+    mkdir -p /go/gows/bin && \
+    wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
+    chmod +x /go/gows/bin/gows
+
+#
+# ==============================
+# 4️⃣ Release Stage (Final)
+# ==============================
+FROM node:${NODE_IMAGE_TAG} AS release
+
+ENV PUPPETEER_SKIP_DOWNLOAD=True
+ENV NODE_OPTIONS="--max-old-space-size=16384"
+ARG USE_BROWSER=chromium
+ARG WHATSAPP_DEFAULT_ENGINE
+
+RUN echo "USE_BROWSER=$USE_BROWSER"
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y ffmpeg libvips zip unzip wget curl libc6 tini \
+    xvfb xauth libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 ca-certificates \
+    fonts-freefont-ttf fonts-gfs-neohellenic fonts-indic fonts-ipafont-gothic fonts-kacst \
+    fonts-liberation fonts-noto-cjk fonts-noto-color-emoji fonts-roboto fonts-thai-tlwg \
+    fonts-wqy-zenhei fonts-open-sans fontconfig \
+    && rm -rf /var/lib/apt/lists/*
+
+# Optional Chromium installation
+RUN if [ "$USE_BROWSER" = "chromium" ]; then \
+        apt-get update && apt-get install -y chromium && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 WORKDIR /app
 
-# Copy built artifacts and node_modules from build stage
-COPY --from=build /app /app
+# Copy node_modules and built app from build stage
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=dashboard /dashboard ./dist/dashboard
+COPY --from=gows /go/gows/bin/gows /app/gows
 
-# ==============================
-# Environment configuration
-# ==============================
-ENV PORT=3000 \
-    WAHA_CORE_ENABLED=true \
-    WAHA_APPS_ENABLED=true \
-    WAHA_VERSION=core \
-    DB_TYPE=sqlite \
-    DB_SQLITE_FILENAME=/app/sessions.db \
-    WAHA_REDIS_ENABLED=false \
-    WAHA_DISABLE_REDIS=true \
-    WAHA_REDIS_HOST=none \
-    LOG_LEVEL=info
+# WAHA GOWS paths
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
 
-# Expose WAHA port
+# Environment variables to completely disable Redis
+ENV WAHA_REDIS_ENABLED=false
+ENV WAHA_DISABLE_REDIS=true
+ENV WAHA_CORE_ENABLED=true
+ENV WAHA_APPS_ENABLED=true
+ENV WAHA_VERSION=core
+ENV DB_TYPE=sqlite
+ENV DB_SQLITE_FILENAME=/app/sessions.db
+ENV LOG_LEVEL=info
+ENV WAHA_ZIPPER=ZIPUNZIP
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+COPY entrypoint.sh /entrypoint.sh
 EXPOSE 3000
 
-# -------------------------------------------------------
-# 3️⃣ Preserve any existing entrypoint as /entrypoint.orig
-# -------------------------------------------------------
-COPY entrypoint.sh /entrypoint.orig
-RUN chmod +x /entrypoint.orig || true
+# Use tini as init system
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]
 
-# -------------------------------------------------------
-# 4️⃣ Create a Redis-stubbing entrypoint wrapper
-# -------------------------------------------------------
-RUN cat > /entrypoint.sh <<'SH'
-#!/bin/sh
-set -e
-
-echo "[waha-entrypoint] Ensuring ioredis stub exists..."
-
-mkdir -p /app/node_modules/ioredis
-
-# Write safe no-network Redis stub
-cat > /app/node_modules/ioredis/index.js.tmp <<'JS'
-/**
- * ioredis runtime stub — prevents any Redis network connections.
- * Exports a class with expected methods; no network I/O.
- */
-module.exports = class Redis {
-  constructor(){ this.isStub = true; }
-  on(){ return this; }
-  once(){ return this; }
-  off(){ return this; }
-  quit(cb){ if(typeof cb==='function') cb(null,'OK'); return Promise.resolve('OK'); }
-  disconnect(){ return; }
-  get(){ return Promise.resolve(null); }
-  set(){ return Promise.resolve('OK'); }
-  del(){ return Promise.resolve(0); }
-  publish(){ return Promise.resolve(0); }
-  subscribe(){ return; }
-  unsubscribe(){ return; }
-  multi(){ return this; }
-  exec(){ return Promise.resolve([]); }
-};
-JS
-
-mv /app/node_modules/ioredis/index.js.tmp /app/node_modules/ioredis/index.js
-chmod 644 /app/node_modules/ioredis/index.js || true
-
-echo "[waha-entrypoint] ioredis stub written to /app/node_modules/ioredis/index.js"
-
-# Run the original entrypoint if it exists
-if [ -x /entrypoint.orig ]; then
-  echo "[waha-entrypoint] Executing original entrypoint /entrypoint.orig"
-  exec /entrypoint.orig "$@"
-fi
-
-# Fallback: direct Node start
-if [ -f /app/dist/main.js ]; then
-  echo "[waha-entrypoint] Starting WAHA via node /app/dist/main.js"
-  exec node /app/dist/main.js
-fi
+# === End of Dockerfile ===fi
 
 # Final fallback: execute passed command
 exec "$@"
