@@ -131,20 +131,20 @@ exports.RedisService=class RedisServiceStub{};
 exports.InjectRedis=()=>()=>{};
 JS
 
-# RMutexService stub with 3 parameters
+# RMutexService stub with 3 parameters (fixed DI issue)
 RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
     cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
 class RMutexService {
-  constructor(redisClient, logger, timeout) {
+  constructor(redisClient = null, logger = null, timeout = 0) {
     this.redisClient = redisClient;
     this.logger = logger;
     this.timeout = timeout;
     console.log('RMutexService STUB: Distributed locking disabled');
   }
 
-  async acquireLock(resource){ return true; }
-  async releaseLock(resource){ return true; }
-  async withLock(resource, fn){ return await fn(); }
+  async acquireLock(resource) { return true; }
+  async releaseLock(resource) { return true; }
+  async withLock(resource, fn) { return await fn(); }
 }
 
 const RMutexModule = {
