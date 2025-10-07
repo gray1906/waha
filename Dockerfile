@@ -78,14 +78,11 @@ RUN \
     wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
     chmod +x /go/gows/bin/gows
 
-
 #
 # Final
 #
-FROM devlikeapro/waha:core AS release
+FROM devlikeapro/waha AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
-# Quick fix for memory potential memory leaks
-# https://github.com/devlikeapro/waha/issues/347
 ENV NODE_OPTIONS="--max-old-space-size=16384"
 ARG USE_BROWSER=chromium
 ARG WHATSAPP_DEFAULT_ENGINE
@@ -107,6 +104,111 @@ RUN if [ "$USE_BROWSER" = "chromium" ] || [ "$USE_BROWSER" = "chrome" ]; then \
     && rm -rf /var/lib/apt/lists/*; \
     fi
 
+# Install wget - either for chromium or chrome
+RUN if [ "$USE_BROWSER" = "chromium" ] || [ "$USE_BROWSER" = "chrome" ]; then \
+    apt-get update  \
+    && apt-get install -y wget \
+    && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Install fonts if using either chromium or chrome
+RUN if [ "$USE_BROWSER" = "chromium" ] || [ "$USE_BROWSER" = "chrome" ]; then \
+    apt-get update  \
+    && apt-get install -y \
+        fontconfig \
+        fonts-freefont-ttf \
+        fonts-gfs-neohellenic \
+        fonts-indic \
+        fonts-ipafont-gothic \
+        fonts-kacst \
+        fonts-liberation \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
+        fonts-roboto \
+        fonts-thai-tlwg \
+        fonts-wqy-zenhei \
+        fonts-open-sans \
+      --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Install xvfb, xauth
+RUN if [ "$USE_BROWSER" = "chromium" ] || [ "$USE_BROWSER" = "chrome" ]; then \
+    apt-get update && apt-get install -y --no-install-recommends \
+        xvfb \
+        xauth \
+        libnss3 \
+        libxss1 \
+        libasound2 \
+        libatk-bridge2.0-0 \
+        libgtk-3-0 \
+        libdrm2 \
+        ca-certificates \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Install Chromium
+RUN if [ "$USE_BROWSER" = "chromium" ]; then \
+        apt-get update  \
+        && apt-get update \
+        && apt-get install -y chromium \
+          --no-install-recommends \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# Install Chrome
+ARG CHROME_VERSION="140.0.7339.80-1"
+RUN if [ "$USE_BROWSER" = "chrome" ]; then \
+        wget --no-verbose -O /tmp/chrome.deb https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}_amd64.deb \
+          && apt-get update \
+          && apt install -y /tmp/chrome.deb \
+          && rm /tmp/chrome.deb \
+          && rm -rf /var/lib/apt/lists/*; \
+    fi
+
+# curl
+RUN apt-get update  \
+    && apt-get install -y curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# GOWS requirements
+RUN  apt-get update \
+     && apt-get install -y libc6 \
+     && rm -rf /var/lib/apt/lists/*
+
+# Install tini for proper init process
+RUN apt-get update && apt-get install -y tini && rm -rf /var/lib/apt/lists/*
+
+# Set the ENV for docker image
+ENV WHATSAPP_DEFAULT_ENGINE=$WHATSAPP_DEFAULT_ENGINE
+
+# Attach sources, install packages
+WORKDIR /app
+COPY package.json ./
+COPY --from=build /git/node_modules ./node_modules
+COPY --from=build /git/dist ./dist
+COPY --from=dashboard /dashboard ./dist/dashboard
+COPY --from=gows /go/gows/bin/gows /app/gows
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+COPY entrypoint.sh /entrypoint.sh
+
+# Chokidar options to monitor file changes
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+# --- Redis disable ---
+ENV WAHA_REDIS_ENABLED=false
+ENV WAHA_DISABLE_REDIS=true
+
+# Run command, etc
+EXPOSE 3000
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]
 # Install wget - either for chromium or chrome
 RUN if [ "$USE_BROWSER" = "chromium" ] || [ "$USE_BROWSER" = "chrome" ]; then \
     apt-get update  \
