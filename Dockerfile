@@ -130,25 +130,133 @@ exports.RedisService=class RedisServiceStub{};
 exports.InjectRedis=()=>()=>{};
 JS
 
-# 🧩 CRITICAL: Stub RMutexService BEFORE building to prevent dependency resolution errors
+# 🧩 CRITICAL: Stub RMutexService at SOURCE level BEFORE building
+# This ensures the real source code is replaced before compilation
+RUN mkdir -p node_modules/@waha/core/src/common/rmutex && \
+    cat > node_modules/@waha/core/src/common/rmutex/index.ts <<'TS'
+export class RMutexService {
+  constructor(
+    private readonly options: any,
+    private readonly logger: any, 
+    private readonly ttl: number
+  ) {
+    console.log('RMutexService STUB: Distributed locking disabled');
+  }
+
+  async acquireLock(resource: string): Promise<boolean> {
+    console.log('RMutexService STUB: acquireLock for', resource);
+    return true;
+  }
+
+  async releaseLock(resource: string): Promise<boolean> {
+    console.log('RMutexService STUB: releaseLock for', resource);
+    return true;
+  }
+
+  async withLock<T>(resource: string, fn: () => Promise<T>): Promise<T> {
+    console.log('RMutexService STUB: withLock for', resource, '- executing without lock');
+    return await fn();
+  }
+}
+
+export const RMutexModule = {
+  forRoot: () => ({
+    module: class RMutexModule {},
+    providers: [
+      {
+        provide: RMutexService,
+        useFactory: (options: any, logger: any, ttl: number) => {
+          return new RMutexService(options, logger, ttl);
+        },
+        inject: ['RMUTEX_OPTIONS', 'PinoLogger:RMutexService', 'RMUTEX_DEFAULT_TTL']
+      }
+    ],
+    exports: [RMutexService]
+  }),
+  forRootAsync: () => ({
+    module: class RMutexModuleAsync {},
+    providers: [
+      {
+        provide: RMutexService,
+        useFactory: (options: any, logger: any, ttl: number) => {
+          return new RMutexService(options, logger, ttl);
+        },
+        inject: ['RMUTEX_OPTIONS', 'PinoLogger:RMutexService', 'RMUTEX_DEFAULT_TTL']
+      }
+    ],
+    exports: [RMutexService]
+  }),
+};
+TS
+
+# Also create a pre-compiled version as backup
 RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
     cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
 class RMutexService {
-  constructor(options, logger, ttl) { this.options=options; this.logger=logger; this.ttl=ttl; console.log('RMutexService STUB: Distributed locking disabled'); }
+  constructor(options, logger, ttl) { 
+    this.options=options; 
+    this.logger=logger; 
+    this.ttl=ttl; 
+    console.log('RMutexService STUB: Distributed locking disabled'); 
+  }
   async acquireLock(resource){console.log('RMutexService STUB: acquireLock for',resource); return true;}
   async releaseLock(resource){console.log('RMutexService STUB: releaseLock for',resource); return true;}
   async withLock(resource,fn){console.log('RMutexService STUB: withLock for',resource,'- executing without lock'); return await fn();}
 }
 const RMutexModule={
-  forRoot:()=>({module:class RMutexModule{}, providers:[{provide:RMutexService,useFactory:(options,logger,ttl)=>new RMutexService(options,logger,ttl),inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']}], exports:[RMutexService]}),
-  forRootAsync:()=>({module:class RMutexModuleAsync{}, providers:[{provide:RMutexService,useFactory:(options,logger,ttl)=>new RMutexService(options,logger,ttl),inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']}], exports:[RMutexService]})
+  forRoot:()=>({
+    module: class RMutexModule{},
+    providers:[{
+      provide: RMutexService,
+      useFactory: (options, logger, ttl) => new RMutexService(options, logger, ttl),
+      inject: ['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']
+    }],
+    exports:[RMutexService]
+  }),
+  forRootAsync:()=>({
+    module: class RMutexModuleAsync{},
+    providers:[{
+      provide: RMutexService,
+      useFactory: (options, logger, ttl) => new RMutexService(options, logger, ttl),
+      inject: ['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']
+    }],
+    exports:[RMutexService]
+  })
 };
 exports.RMutexService=RMutexService;
 exports.RMutexModule=RMutexModule;
 JS
 
+# 🧩 ADDITIONAL: Also stub the main @waha/core entry point to ensure our stubs are used
+RUN cat > node_modules/@waha/core/index.js <<'JS'
+// Main entry stub for @waha/core to ensure our RMutex stub is used
+module.exports = require('./dist/common/rmutex');
+JS
+
 # Copy full source and ensure build-time installs are up to date
 COPY . /git
+
+# 🧩 CRITICAL: Override the real RMutex source in the project itself
+# This ensures when yarn build runs, it compiles OUR stub instead of the real code
+RUN if [ -d "/git/packages/core/src/common/rmutex" ]; then \
+    echo "Overriding real RMutex source with stub..."; \
+    mkdir -p /git/packages/core/src/common/rmutex; \
+    cat > /git/packages/core/src/common/rmutex/index.ts <<'EOF'
+export class RMutexService {
+  constructor(options: any, logger: any, ttl: number) {
+    console.log('RMutexService PROJECT STUB: Distributed locking disabled');
+  }
+  async acquireLock(resource: string): Promise<boolean> { return true; }
+  async releaseLock(resource: string): Promise<boolean> { return true; }
+  async withLock<T>(resource: string, fn: () => Promise<T>): Promise<T> { return await fn(); }
+}
+export const RMutexModule = {
+  forRoot: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] }),
+  forRootAsync: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] })
+};
+EOF
+    fi
+
 RUN yarn install --frozen-lockfile --inline-builds || true
 
 # Build WAHA (core-only)
