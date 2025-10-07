@@ -37,71 +37,39 @@ RUN rm -rf node_modules/ioredis node_modules/redis node_modules/@node-redis && \
 
 # Create comprehensive ioredis stub
 RUN cat > node_modules/ioredis/index.js <<'JS'
-/**
- * Comprehensive ioredis stub used to disable Redis connections completely.
- * Exports a class with ALL commonly used methods so code expecting Redis won't crash.
- */
 class Redis {
-  constructor(options) { 
-    this.options = options;
-    this.status = 'close';
-    this.isStub = true;
-  }
-  
-  // Connection methods
+  constructor(options) { this.options = options; this.status = 'close'; this.isStub = true; }
   connect() { return Promise.resolve(this); }
   disconnect() { this.status = 'close'; return this; }
   quit() { this.status = 'close'; return Promise.resolve('OK'); }
-  
-  // Event methods  
-  on(event, handler) { return this; }
-  once(event, handler) { return this; }
-  off(event, handler) { return this; }
-  removeListener(event, handler) { return this; }
-  removeAllListeners(event) { return this; }
-  
-  // Key methods
-  get(key) { return Promise.resolve(null); }
-  set(key, value, ...args) { return Promise.resolve('OK'); }
-  del(...keys) { return Promise.resolve(0); }
-  exists(...keys) { return Promise.resolve(0); }
-  expire(key, seconds) { return Promise.resolve(0); }
-  
-  // Hash methods
-  hget(key, field) { return Promise.resolve(null); }
-  hset(key, field, value) { return Promise.resolve(0); }
-  hgetall(key) { return Promise.resolve({}); }
-  
-  // List methods
-  lpush(key, ...values) { return Promise.resolve(0); }
-  rpush(key, ...values) { return Promise.resolve(0); }
-  lpop(key) { return Promise.resolve(null); }
-  rpop(key) { return Promise.resolve(null); }
-  
-  // Set methods
-  sadd(key, ...members) { return Promise.resolve(0); }
-  smembers(key) { return Promise.resolve([]); }
-  
-  // Pub/sub methods
-  publish(channel, message) { return Promise.resolve(0); }
+  on() { return this; }
+  once() { return this; }
+  off() { return this; }
+  removeListener() { return this; }
+  removeAllListeners() { return this; }
+  get() { return Promise.resolve(null); }
+  set() { return Promise.resolve('OK'); }
+  del() { return Promise.resolve(0); }
+  exists() { return Promise.resolve(0); }
+  expire() { return Promise.resolve(0); }
+  hget() { return Promise.resolve(null); }
+  hset() { return Promise.resolve(0); }
+  hgetall() { return Promise.resolve({}); }
+  lpush() { return Promise.resolve(0); }
+  rpush() { return Promise.resolve(0); }
+  lpop() { return Promise.resolve(null); }
+  rpop() { return Promise.resolve(null); }
+  sadd() { return Promise.resolve(0); }
+  smembers() { return Promise.resolve([]); }
+  publish() { return Promise.resolve(0); }
   subscribe(channel) { return Promise.resolve([channel, 0]); }
   unsubscribe(channel) { return Promise.resolve([channel, 0]); }
-  
-  // Transaction methods
-  multi() { 
-    const multi = new RedisMulti();
-    multi.exec = () => Promise.resolve([]);
-    return multi;
-  }
+  multi() { const multi = new RedisMulti(); multi.exec = () => Promise.resolve([]); return multi; }
   pipeline() { return this.multi(); }
-  
-  // Utility methods
   ping() { return Promise.resolve('PONG'); }
   time() { return Promise.resolve([Math.floor(Date.now()/1000), 0]); }
   info() { return Promise.resolve(''); }
-  
-  // Scan methods
-  scan(cursor, ...args) { return Promise.resolve(['0', []]); }
+  scan() { return Promise.resolve(['0', []]); }
 }
 
 class RedisMulti {
@@ -113,7 +81,6 @@ class RedisMulti {
   exec() { return Promise.resolve([]); }
 }
 
-// Export both default and named exports
 module.exports = Redis;
 module.exports.Redis = Redis;
 module.exports.Cluster = Redis;
@@ -121,20 +88,16 @@ module.exports.Command = class Command {};
 module.exports.ReplyError = class ReplyError extends Error {};
 JS
 
-# 🧩 Add stub for ioredis/built/utils (required by BullMQ)
+# Stub for ioredis/built/utils (required by BullMQ)
 RUN mkdir -p node_modules/ioredis/built && \
     cat > node_modules/ioredis/built/utils.js <<'JS'
-/**
- * Stub for ioredis/built/utils used by BullMQ.
- * Prevents module not found errors when BullMQ tries to import it.
- */
 module.exports = {
   parseURL: () => ({}),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms || 0)),
 };
 JS
 
-# Create stubs for other Redis client packages
+# Other Redis clients stub
 RUN cat > node_modules/redis/index.js <<'JS'
 module.exports = {
   createClient: () => ({
@@ -161,15 +124,9 @@ module.exports = {
 };
 JS
 
-# Stub the NestJS Redis module itself to prevent it from loading real Redis
-RUN mkdir -p node_modules/@liaoliaots/nestjs-redis && \
-    cat > node_modules/@liaoliaots/nestjs-redis/index.js <<'JS'
-module.exports = {};
-JS
-
+# NestJS Redis module stub
 RUN mkdir -p node_modules/@liaoliaots/nestjs-redis/dist && \
     cat > node_modules/@liaoliaots/nestjs-redis/dist/index.js <<'JS'
-// Stub NestJS Redis module
 exports.RedisModule = {
   forRoot: () => ({ module: class RedisModuleStub {} }),
   forRootAsync: () => ({ module: class RedisModuleStubAsync {} })
@@ -178,24 +135,41 @@ exports.RedisService = class RedisServiceStub {};
 exports.InjectRedis = () => () => {};
 JS
 
-# Copy full source (after deps installed so cache is effective) and ensure build-time installs are up to date
+# 🧩 Silent RMutex stub for core
+RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
+    cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
+class RMutexService {
+  constructor(options, logger, ttl) { this.options = options; this.logger = logger; this.ttl = ttl; }
+  async acquireLock() { return true; }
+  async releaseLock() { return true; }
+  async withLock(resource, fn) { return await fn(); }
+}
+const RMutexModule = {
+  forRoot: () => ({
+    module: class RMutexModule {},
+    providers: [
+      { provide: RMutexService, useFactory: (o,l,t)=>new RMutexService(o,l,t), inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL'] }
+    ],
+    exports: [RMutexService]
+  }),
+  forRootAsync: () => ({
+    module: class RMutexModuleAsync {},
+    providers: [
+      { provide: RMutexService, useFactory: (o,l,t)=>new RMutexService(o,l,t), inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL'] }
+    ],
+    exports: [RMutexService]
+  }),
+};
+exports.RMutexService = RMutexService;
+exports.RMutexModule = RMutexModule;
+JS
+
+# Copy full source and ensure build-time installs
 COPY . /git
 RUN yarn install --frozen-lockfile --inline-builds || true
 
 # Build WAHA (core-only)
 RUN yarn build && find ./dist -name "*.d.ts" -delete
-
-# Enhanced diagnostic - check for any Redis references that might cause issues
-RUN echo "=== Checking for problematic Redis references ===" && \
-    if find ./dist -name "*.js" -exec grep -l "ioredis\|@liaoliaots/nestjs-redis\|redis" {} \; 2>/dev/null | grep -q .; then \
-        echo "WARNING: Redis references found in dist:"; \
-        find ./dist -name "*.js" -exec grep -l "ioredis\|@liaoliaots/nestjs-redis\|redis" {} \; 2>/dev/null | while read file; do \
-            echo "File: $file"; \
-            grep -n "ioredis\|@liaoliaots/nestjs-redis\|redis" "$file" | head -5; \
-        done; \
-    else \
-        echo "OK: no problematic Redis references in dist"; \
-    fi
 
 # Dashboard stage
 FROM node:${NODE_IMAGE_TAG} AS dashboard
@@ -225,7 +199,7 @@ RUN \
     wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
     chmod +x /go/gows/bin/gows
 
-# Final runtime image — copy prepared node_modules + dist (no Redis attempts)
+# Final runtime image — copy prepared node_modules + dist
 FROM node:${NODE_IMAGE_TAG} AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 ENV NODE_OPTIONS="--max-old-space-size=16384"
@@ -234,50 +208,35 @@ ARG WHATSAPP_DEFAULT_ENGINE
 
 RUN echo "USE_BROWSER=$USE_BROWSER"
 
-# Puppeteer / Chromium flags
 ENV WA_PUPPETEER_HEADLESS=true
 ENV WA_PUPPETEER_SANDBOX=false
 ENV WA_PUPPETEER_SLOW_MO=50
-
-# WAHA runtime safety flags
 ENV WAHA_CORE_ONLY=true
 ENV WAHA_REDIS_ENABLED=false
 ENV WAHA_DISABLE_REDIS=true
-
-# DB (sqlite)
 ENV DB_TYPE=sqlite
 ENV DB_SQLITE_FILENAME=/app/sessions.db
 
-# Install runtime packages needed for headless Chromium + ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libvips zip unzip wget ca-certificates tini \
     xvfb xauth libc6 libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-
-# Copy prepared artifacts from build stage
 COPY --from=build /git/node_modules ./node_modules
 COPY --from=build /git/dist ./dist
-
-# Attach dashboard and GOWS
 COPY --from=dashboard /dashboard ./dist/dashboard
 COPY --from=gows /go/gows/bin/gows /app/gows
 ENV WAHA_GOWS_PATH=/app/gows
 ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
 
-# Ensure entrypoint exists if present in repo; make executable
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh || true
 
-# Chokidar options
 ENV CHOKIDAR_USEPOLLING=1
 ENV CHOKIDAR_INTERVAL=5000
-
-# WAHA variables
 ENV WAHA_ZIPPER=ZIPUNZIP
 
-# Expose port and run
 EXPOSE 3000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/entrypoint.sh"]
