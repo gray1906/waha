@@ -1,3 +1,4 @@
+# === COMPLETE WAHA DOCKERFILE (build core-only + stub ioredis) ===
 ARG NODE_IMAGE_TAG=22.16-bookworm-slim
 ARG GOLANG_IMAGE_TAG=1.23-bookworm
 
@@ -7,35 +8,75 @@ ARG GOLANG_IMAGE_TAG=1.23-bookworm
 FROM node:${NODE_IMAGE_TAG} AS build
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 
+# Force WAHA core-only flags for build-time (so the produced dist is core)
+ENV WAHA_VERSION=core
+ENV WAHA_CORE_ONLY=true
+ENV WAHA_DISABLE_REDIS=true
+
 # npm packages
 WORKDIR /git
 COPY package.json .
 COPY yarn.lock .
 ENV YARN_CHECKSUM_BEHAVIOR=update
 
-# git
-RUN apt-get update && apt-get install -y git
+# install git (needed by some installs)
+RUN apt-get update && apt-get install -y git ca-certificates && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g corepack && corepack enable
 RUN yarn set version 3.6.3
-RUN yarn install
 
-# App
+# Install dependencies (this will populate node_modules)
+RUN yarn install --frozen-lockfile --production=false
+
+# Replace any real ioredis with a no-op stub in node_modules (prevents any real Redis connection)
+RUN rm -rf node_modules/ioredis \
+ && mkdir -p node_modules/ioredis \
+ && cat > node_modules/ioredis/index.js <<'JS'
+/**
+ * ioredis stub to prevent network connections during runtime.
+ * Provides commonly used methods used by WAHA code but performs no I/O.
+ */
+module.exports = class Redis {
+  constructor() { this.isStub = true; }
+  on() { return this; }
+  once() { return this; }
+  off() { return this; }
+  quit(cb) { if(typeof cb==='function') cb(null,'OK'); return Promise.resolve('OK'); }
+  disconnect() { return; }
+  get() { return Promise.resolve(null); }
+  set() { return Promise.resolve('OK'); }
+  del() { return Promise.resolve(0); }
+  publish() { return Promise.resolve(0); }
+  subscribe() { return; }
+  unsubscribe() { return; }
+  multi() { return this; }
+  exec() { return Promise.resolve([]); }
+};
+JS
+
+# Copy source and build (ensures build uses the stub and core flags)
 WORKDIR /git
 ADD . /git
-RUN yarn install
+
+# Reinstall dev deps if required by build scripts (safe)
+RUN yarn install --frozen-lockfile
+
+# Build WAHA
 RUN yarn build && find ./dist -name "*.d.ts" -delete
 
+# Safety check: confirm dist/node files do not contain direct ioredis strings
+# (This will not fail the build, but will print occurrences if any)
+RUN set -e; \
+    if grep -R --line-number "ioredis" ./dist 2>/dev/null | grep -q .; then \
+       echo "Warning: ioredis references found in dist:"; grep -R --line-number "ioredis" ./dist || true; \
+    else echo "OK: no ioredis references in dist"; fi
+
 #
-# Dashboard
+# Dashboard stage (unchanged)
 #
 FROM node:${NODE_IMAGE_TAG} AS dashboard
 
-# jq to parse json
-RUN apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*
-
-# wget, unzip
-RUN apt-get update && apt-get install -y wget unzip && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y jq wget unzip && rm -rf /var/lib/apt/lists/*
 
 COPY waha.config.json /tmp/waha.config.json
 RUN \
@@ -49,21 +90,11 @@ RUN \
     && rm -rf /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}
 
 #
-# GOWS
+# GOWS stage (unchanged)
 #
 FROM golang:${GOLANG_IMAGE_TAG} AS gows
 
-# jq to parse json
-RUN apt-get update && apt-get install -y jq && rm -rf /var/lib/apt/lists/*
-
-# install protoc
-RUN apt-get update && \
-    apt-get install protobuf-compiler -y
-
-# Image processing for thumbnails
-RUN apt-get update  \
-    && apt-get install -y libvips-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y jq protobuf-compiler libvips-dev && rm -rf /var/lib/apt/lists/*
 
 COPY waha.config.json /tmp/waha.config.json
 WORKDIR /go/gows
@@ -79,7 +110,7 @@ RUN \
     chmod +x /go/gows/bin/gows
 
 #
-# Final Stage
+# Final runtime image (node) - copy prepared node_modules + dist
 #
 FROM node:${NODE_IMAGE_TAG} AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
@@ -89,22 +120,54 @@ ARG WHATSAPP_DEFAULT_ENGINE
 
 RUN echo "USE_BROWSER=$USE_BROWSER"
 
-# Puppeteer / Chromium flags
+# Puppeteer / Chromium flags (keep your previous choices)
 ENV WA_PUPPETEER_HEADLESS=true
 ENV WA_PUPPETEER_SANDBOX=false
 ENV WA_PUPPETEER_SLOW_MO=50
 
-# Core-only WAHA flags to disable Redis
+# WAHA runtime (safety)
 ENV WAHA_CORE_ONLY=true
 ENV WAHA_REDIS_ENABLED=false
 ENV WAHA_DISABLE_REDIS=true
 
-# Optional DB envs (sqlite)
+# DB (sqlite)
 ENV DB_TYPE=sqlite
 ENV DB_SQLITE_FILENAME=/app/sessions.db
 
-# Attach GOWS
+# System packages needed for runtime browser support
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    ffmpeg libvips zip unzip wget ca-certificates tini \
+    xvfb xauth libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+
+# copy prepared node_modules and dist from build
+COPY --from=build /git/node_modules ./node_modules
+COPY --from=build /git/dist ./dist
+
+# attach dashboard and GOWS binaries
+COPY --from=dashboard /dashboard ./dist/dashboard
+COPY --from=gows /go/gows/bin/gows /app/gows
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+# Ensure entrypoint exists if you have one in repo; else use base behavior
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh || true
+
+# Chokidar options
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+# final port and entrypoint
+EXPOSE 3000
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]WORKDIR /app
 COPY --from=gows /go/gows/bin/gows /app/gows
 ENV WAHA_GOWS_PATH=/app/gows
 ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
