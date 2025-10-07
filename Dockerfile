@@ -82,7 +82,7 @@ RUN \
 #
 # Final
 #
-FROM node:${NODE_IMAGE_TAG} AS release
+FROM devlikeapro/waha:core@sha256:<digest-of-core> AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 # Quick fix for memory potential memory leaks
 # https://github.com/devlikeapro/waha/issues/347
