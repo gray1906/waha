@@ -28,56 +28,54 @@ RUN yarn set version 3.6.3
 # Ensure Yarn uses node_modules (avoid PnP surprises)
 RUN printf '%s\n' 'nodeLinker: "node-modules"' > /git/.yarnrc.yml
 
-# Install dependencies (Yarn v3 compatible). inline-builds allows native build scripts to run.
+# Install dependencies
 RUN yarn install --frozen-lockfile --inline-builds
 
-# COMPREHENSIVE REDIS STUBBING - Replace ioredis and related Redis dependencies with stubs
+# COMPREHENSIVE REDIS STUBBING
 RUN rm -rf node_modules/ioredis node_modules/redis node_modules/@node-redis && \
     mkdir -p node_modules/ioredis node_modules/redis node_modules/@node-redis
 
-# Create comprehensive ioredis stub
+# ioredis stub
 RUN cat > node_modules/ioredis/index.js <<'JS'
-class Redis {
-  constructor(options) { this.options = options; this.status = 'close'; this.isStub = true; }
-  connect() { return Promise.resolve(this); }
-  disconnect() { this.status='close'; return this; }
-  quit() { this.status='close'; return Promise.resolve('OK'); }
-  on() { return this; }
-  once() { return this; }
-  off() { return this; }
-  removeListener() { return this; }
-  removeAllListeners() { return this; }
-  get() { return Promise.resolve(null); }
-  set() { return Promise.resolve('OK'); }
-  del() { return Promise.resolve(0); }
-  exists() { return Promise.resolve(0); }
-  expire() { return Promise.resolve(0); }
-  hget() { return Promise.resolve(null); }
-  hset() { return Promise.resolve(0); }
-  hgetall() { return Promise.resolve({}); }
-  lpush() { return Promise.resolve(0); }
-  rpush() { return Promise.resolve(0); }
-  lpop() { return Promise.resolve(null); }
-  rpop() { return Promise.resolve(null); }
-  sadd() { return Promise.resolve(0); }
-  smembers() { return Promise.resolve([]); }
-  publish() { return Promise.resolve(0); }
-  subscribe(channel) { return Promise.resolve([channel,0]); }
-  unsubscribe(channel) { return Promise.resolve([channel,0]); }
-  multi() { const m = new RedisMulti(); m.exec=()=>Promise.resolve([]); return m; }
-  pipeline() { return this.multi(); }
-  ping() { return Promise.resolve('PONG'); }
-  time() { return Promise.resolve([Math.floor(Date.now()/1000),0]); }
-  info() { return Promise.resolve(''); }
-  scan() { return Promise.resolve(['0',[]]); }
+class Redis { constructor(options){this.options=options;this.status='close';this.isStub=true;}
+connect(){return Promise.resolve(this);}
+disconnect(){this.status='close';return this;}
+quit(){this.status='close';return Promise.resolve('OK');}
+on(){return this;}
+once(){return this;}
+off(){return this;}
+removeListener(){return this;}
+removeAllListeners(){return this;}
+get(){return Promise.resolve(null);}
+set(){return Promise.resolve('OK');}
+del(){return Promise.resolve(0);}
+exists(){return Promise.resolve(0);}
+expire(){return Promise.resolve(0);}
+hget(){return Promise.resolve(null);}
+hset(){return Promise.resolve(0);}
+hgetall(){return Promise.resolve({});}
+lpush(){return Promise.resolve(0);}
+rpush(){return Promise.resolve(0);}
+lpop(){return Promise.resolve(null);}
+rpop(){return Promise.resolve(null);}
+sadd(){return Promise.resolve(0);}
+smembers(){return Promise.resolve([]);}
+publish(){return Promise.resolve(0);}
+subscribe(channel){return Promise.resolve([channel,0]);}
+unsubscribe(channel){return Promise.resolve([channel,0]);}
+multi(){const m=new RedisMulti();m.exec=()=>Promise.resolve([]);return m;}
+pipeline(){return this.multi();}
+ping(){return Promise.resolve('PONG');}
+time(){return Promise.resolve([Math.floor(Date.now()/1000),0]);}
+info(){return Promise.resolve('');}
+scan(){return Promise.resolve(['0',[]]);}
 }
-class RedisMulti {
-  constructor() { this._queue=[]; }
-  get(key){this._queue.push(['get',key]); return this;}
-  set(key,value){this._queue.push(['set',key,value]); return this;}
-  del(...keys){this._queue.push(['del',...keys]); return this;}
-  hset(key,field,value){this._queue.push(['hset',key,field,value]); return this;}
-  exec(){return Promise.resolve([]);}
+class RedisMulti{constructor(){this._queue=[];}
+get(key){this._queue.push(['get',key]);return this;}
+set(key,value){this._queue.push(['set',key,value]);return this;}
+del(...keys){this._queue.push(['del',...keys]);return this;}
+hset(key,field,value){this._queue.push(['hset',key,field,value]);return this;}
+exec(){return Promise.resolve([]);}
 }
 module.exports=Redis;
 module.exports.Redis=Redis;
@@ -86,193 +84,86 @@ module.exports.Command=class Command{};
 module.exports.ReplyError=class ReplyError extends Error{};
 JS
 
-# 🧩 Add stub for ioredis/built/utils (required by BullMQ)
+# ioredis built utils stub
 RUN mkdir -p node_modules/ioredis/built && \
     cat > node_modules/ioredis/built/utils.js <<'JS'
 module.exports = {
   parseURL: () => ({}),
-  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms || 0)),
+  sleep: (ms) => new Promise(resolve => setTimeout(resolve, ms || 0)),
 };
 JS
 
-# Create stubs for other Redis client packages
+# redis & @node-redis stubs
 RUN cat > node_modules/redis/index.js <<'JS'
-module.exports = {
-  createClient: () => ({
-    connect: () => Promise.resolve(),
-    on: () => {},
-    quit: () => Promise.resolve(),
-    get: () => Promise.resolve(null),
-    set: () => Promise.resolve('OK'),
-    isOpen: true
-  })
-};
+module.exports = { createClient: () => ({ connect: () => Promise.resolve(), on: () => {}, quit: () => Promise.resolve(), get: () => Promise.resolve(null), set: () => Promise.resolve('OK'), isOpen: true }) };
 JS
 
 RUN mkdir -p node_modules/@node-redis/client && \
     cat > node_modules/@node-redis/client/index.js <<'JS'
-module.exports = {
-  createClient: () => ({
-    connect: () => Promise.resolve(),
-    on: () => {},
-    quit: () => Promise.resolve(),
-    get: () => Promise.resolve(null),
-    set: () => Promise.resolve('OK')
-  })
-};
+module.exports = { createClient: () => ({ connect: () => Promise.resolve(), on: () => {}, quit: () => Promise.resolve(), get: () => Promise.resolve(null), set: () => Promise.resolve('OK') }) };
 JS
 
-# Stub the NestJS Redis module itself
-RUN mkdir -p node_modules/@liaoliaots/nestjs-redis && \
+# NestJS Redis stub
+RUN mkdir -p node_modules/@liaoliaots/nestjs-redis/dist && \
     cat > node_modules/@liaoliaots/nestjs-redis/dist/index.js <<'JS'
 exports.RedisModule={forRoot:()=>({module:class RedisModuleStub{}}),forRootAsync:()=>({module:class RedisModuleStubAsync{}})};
 exports.RedisService=class RedisServiceStub{};
 exports.InjectRedis=()=>()=>{};
 JS
 
-# 🧩 CRITICAL: Stub RMutexService at SOURCE level BEFORE building
-# This ensures the real source code is replaced before compilation
+# Stub RMutexService at source level
 RUN mkdir -p node_modules/@waha/core/src/common/rmutex && \
     cat > node_modules/@waha/core/src/common/rmutex/index.ts <<'TS'
 export class RMutexService {
-  constructor(
-    private readonly options: any,
-    private readonly logger: any, 
-    private readonly ttl: number
-  ) {
+  constructor(private readonly options: any, private readonly logger: any, private readonly ttl: number){
     console.log('RMutexService STUB: Distributed locking disabled');
-  }
-
-  async acquireLock(resource: string): Promise<boolean> {
-    console.log('RMutexService STUB: acquireLock for', resource);
-    return true;
-  }
-
-  async releaseLock(resource: string): Promise<boolean> {
-    console.log('RMutexService STUB: releaseLock for', resource);
-    return true;
-  }
-
-  async withLock<T>(resource: string, fn: () => Promise<T>): Promise<T> {
-    console.log('RMutexService STUB: withLock for', resource, '- executing without lock');
-    return await fn();
-  }
-}
-
-export const RMutexModule = {
-  forRoot: () => ({
-    module: class RMutexModule {},
-    providers: [
-      {
-        provide: RMutexService,
-        useFactory: (options: any, logger: any, ttl: number) => {
-          return new RMutexService(options, logger, ttl);
-        },
-        inject: ['RMUTEX_OPTIONS', 'PinoLogger:RMutexService', 'RMUTEX_DEFAULT_TTL']
-      }
-    ],
-    exports: [RMutexService]
-  }),
-  forRootAsync: () => ({
-    module: class RMutexModuleAsync {},
-    providers: [
-      {
-        provide: RMutexService,
-        useFactory: (options: any, logger: any, ttl: number) => {
-          return new RMutexService(options, logger, ttl);
-        },
-        inject: ['RMUTEX_OPTIONS', 'PinoLogger:RMutexService', 'RMUTEX_DEFAULT_TTL']
-      }
-    ],
-    exports: [RMutexService]
-  }),
-};
-TS
-
-# Also create a pre-compiled version as backup
-RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
-    cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
-class RMutexService {
-  constructor(options, logger, ttl) { 
-    this.options=options; 
-    this.logger=logger; 
-    this.ttl=ttl; 
-    console.log('RMutexService STUB: Distributed locking disabled'); 
-  }
-  async acquireLock(resource){console.log('RMutexService STUB: acquireLock for',resource); return true;}
-  async releaseLock(resource){console.log('RMutexService STUB: releaseLock for',resource); return true;}
-  async withLock(resource,fn){console.log('RMutexService STUB: withLock for',resource,'- executing without lock'); return await fn();}
-}
-const RMutexModule={
-  forRoot:()=>({
-    module: class RMutexModule{},
-    providers:[{
-      provide: RMutexService,
-      useFactory: (options, logger, ttl) => new RMutexService(options, logger, ttl),
-      inject: ['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']
-    }],
-    exports:[RMutexService]
-  }),
-  forRootAsync:()=>({
-    module: class RMutexModuleAsync{},
-    providers:[{
-      provide: RMutexService,
-      useFactory: (options, logger, ttl) => new RMutexService(options, logger, ttl),
-      inject: ['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']
-    }],
-    exports:[RMutexService]
-  })
-};
-exports.RMutexService=RMutexService;
-exports.RMutexModule=RMutexModule;
-JS
-
-# 🧩 ADDITIONAL: Also stub the main @waha/core entry point to ensure our stubs are used
-RUN cat > node_modules/@waha/core/index.js <<'JS'
-// Main entry stub for @waha/core to ensure our RMutex stub is used
-module.exports = require('./dist/common/rmutex');
-JS
-
-# Copy full source and ensure build-time installs are up to date
-COPY . /git
-
-# 🧩 CRITICAL: Override the real RMutex source in the project itself
-# This ensures when yarn build runs, it compiles OUR stub instead of the real code
-RUN if [ -d "/git/packages/core/src/common/rmutex" ]; then \
-    echo "Overriding real RMutex source with stub..."; \
-    mkdir -p /git/packages/core/src/common/rmutex; \
-    cat > /git/packages/core/src/common/rmutex/index.ts <<'EOF'
-export class RMutexService {
-  constructor(options: any, logger: any, ttl: number) {
-    console.log('RMutexService PROJECT STUB: Distributed locking disabled');
   }
   async acquireLock(resource: string): Promise<boolean> { return true; }
   async releaseLock(resource: string): Promise<boolean> { return true; }
   async withLock<T>(resource: string, fn: () => Promise<T>): Promise<T> { return await fn(); }
 }
 export const RMutexModule = {
-  forRoot: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] }),
-  forRootAsync: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] })
+  forRoot: () => ({
+    module: class RMutexModule{},
+    providers: [{ provide: RMutexService, useFactory: (options, logger, ttl) => new RMutexService(options, logger, ttl), inject: ['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL'] }],
+    exports: [RMutexService]
+  }),
+  forRootAsync: () => ({
+    module: class RMutexModuleAsync{},
+    providers: [{ provide: RMutexService, useFactory: (options, logger, ttl) => new RMutexService(options, logger, ttl), inject: ['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL'] }],
+    exports: [RMutexService]
+  })
 };
-EOF
-fi
+TS
+
+# Pre-compiled dist version
+RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
+    cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
+class RMutexService{constructor(o,l,t){this.options=o;this.logger=l;this.ttl=t;console.log('RMutexService STUB: Distributed locking disabled');}async acquireLock(r){console.log('RMutexService STUB: acquireLock for',r);return true;}async releaseLock(r){console.log('RMutexService STUB: releaseLock for',r);return true;}async withLock(r,f){console.log('RMutexService STUB: withLock for',r,'- executing without lock');return await f();}}
+const RMutexModule={forRoot:()=>({module:class RMutexModule{},providers:[{provide:RMutexService,useFactory:(o,l,t)=>new RMutexService(o,l,t),inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']}],exports:[RMutexService]}),forRootAsync:()=>({module:class RMutexModuleAsync{},providers:[{provide:RMutexService,useFactory:(o,l,t)=>new RMutexService(o,l,t),inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']}],exports:[RMutexService]})};
+exports.RMutexService=RMutexService;exports.RMutexModule=RMutexModule;
+JS
+
+# Ensure main entry uses our stub
+RUN cat > node_modules/@waha/core/index.js <<'JS'
+module.exports = require('./dist/common/rmutex');
+JS
+
+# Copy project source
+COPY . /git
+
+# Override project RMutex if exists (Dockerfile-safe)
+RUN if [ -d "/git/packages/core/src/common/rmutex" ]; then \
+      echo "Overriding real RMutex source with stub..."; \
+      mkdir -p /git/packages/core/src/common/rmutex; \
+      cat > /git/packages/core/src/common/rmutex/index.ts <<'EOF'
+export class RMutexService { constructor(o,l,t){console.log('RMutexService PROJECT STUB: Distributed locking disabled'); } async acquireLock(r){return true;} async releaseLock(r){return true;} async withLock(r,f){return await f();} }
+export const RMutexModule={forRoot:()=>({module:class{},providers:[{provide:'RMutexService',useClass:RMutexService}],exports:['RMutexService']}),forRootAsync:()=>({module:class{},providers:[{provide:'RMutexService',useClass:RMutexService}],exports:['RMutexService']})};
+EOF \
+  ; fi
 
 RUN yarn install --frozen-lockfile --inline-builds || true
-
-# Build WAHA (core-only)
 RUN yarn build && find ./dist -name "*.d.ts" -delete
-
-# Enhanced diagnostic for Redis references
-RUN echo "=== Checking for problematic Redis references ===" && \
-    if find ./dist -name "*.js" -exec grep -l "ioredis\|@liaoliaots/nestjs-redis\|redis" {} \; 2>/dev/null | grep -q .; then \
-        echo "WARNING: Redis references found in dist:"; \
-        find ./dist -name "*.js" -exec grep -l "ioredis\|@liaoliaots/nestjs-redis\|redis" {} \; 2>/dev/null | while read file; do \
-            echo "File: $file"; \
-            grep -n "ioredis\|@liaoliaots/nestjs-redis\|redis" "$file" | head -5; \
-        done; \
-    else \
-        echo "OK: no problematic Redis references in dist"; \
-    fi
 
 # Dashboard stage
 FROM node:${NODE_IMAGE_TAG} AS dashboard
@@ -281,12 +172,11 @@ COPY waha.config.json /tmp/waha.config.json
 RUN \
     WAHA_DASHBOARD_GITHUB_REPO=$(jq -r '.waha.dashboard.repo' /tmp/waha.config.json) && \
     WAHA_DASHBOARD_SHA=$(jq -r '.waha.dashboard.ref' /tmp/waha.config.json) && \
-    wget https://github.com/${WAHA_DASHBOARD_GITHUB_REPO}/archive/${WAHA_DASHBOARD_SHA}.zip \
-    && unzip ${WAHA_DASHBOARD_SHA}.zip -d /tmp/dashboard \
-    && mkdir -p /dashboard \
-    && mv /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}/* /dashboard/ \
-    && rm -rf ${WAHA_DASHBOARD_SHA}.zip \
-    && rm -rf /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}
+    wget https://github.com/${WAHA_DASHBOARD_GITHUB_REPO}/archive/${WAHA_DASHBOARD_SHA}.zip && \
+    unzip ${WAHA_DASHBOARD_SHA}.zip -d /tmp/dashboard && \
+    mkdir -p /dashboard && \
+    mv /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}/* /dashboard/ && \
+    rm -rf ${WAHA_DASHBOARD_SHA}.zip /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}
 
 # GOWS stage
 FROM golang:${GOLANG_IMAGE_TAG} AS gows
@@ -302,7 +192,7 @@ RUN \
     wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
     chmod +x /go/gows/bin/gows
 
-# Final runtime image — copy prepared node_modules + dist
+# Final runtime image
 FROM node:${NODE_IMAGE_TAG} AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 ENV NODE_OPTIONS="--max-old-space-size=16384"
@@ -324,7 +214,7 @@ ENV WAHA_DISABLE_REDIS=true
 ENV DB_TYPE=sqlite
 ENV DB_SQLITE_FILENAME=/app/sessions.db
 
-# Install runtime packages needed for headless Chromium + ffmpeg
+# Install runtime packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libvips zip unzip wget ca-certificates tini \
     xvfb xauth libc6 libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 \
@@ -332,28 +222,4 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy prepared artifacts from build stage
-COPY --from=build /git/node_modules ./node_modules
-COPY --from=build /git/dist ./dist
-
-# Attach dashboard and GOWS
-COPY --from=dashboard /dashboard ./dist/dashboard
-COPY --from=gows /go/gows/bin/gows /app/gows
-ENV WAHA_GOWS_PATH=/app/gows
-ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
-
-# Ensure entrypoint exists if present in repo; make executable
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh || true
-
-# Chokidar options
-ENV CHOKIDAR_USEPOLLING=1
-ENV CHOKIDAR_INTERVAL=5000
-
-# WAHA variables
-ENV WAHA_ZIPPER=ZIPUNZIP
-
-# Expose port and run
-EXPOSE 3000
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/entrypoint.sh"]
+# Copy
