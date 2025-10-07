@@ -255,7 +255,7 @@ export const RMutexModule = {
   forRootAsync: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] })
 };
 EOF
-    fi
+fi
 
 RUN yarn install --frozen-lockfile --inline-builds || true
 
