@@ -1,49 +1,49 @@
-# === WAHA Dockerfile — corrected (no unterminated heredoc) ===
+# === WAHA Dockerfile — robust, Yarn v3 compatible, Redis stub, core-only build ===
 ARG NODE_IMAGE_TAG=22.16-bookworm-slim
 ARG GOLANG_IMAGE_TAG=1.23-bookworm
 
 #
-# Build stage
+# Build stage: prepare node_modules (with ioredis stub) and build core-only dist
 #
 FROM node:${NODE_IMAGE_TAG} AS build
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 
-# Force core-only build flags for WAHA compilation
+# Force core-only flags for WAHA build-time
 ENV WAHA_VERSION=core
 ENV WAHA_CORE_ONLY=true
 ENV WAHA_DISABLE_REDIS=true
 
 WORKDIR /git
 
-# copy package manifests first (cache-friendly)
+# Copy manifests first (cache friendly)
 COPY package.json yarn.lock ./
 
-# install system build tools needed for native modules
+# Install system prerequisites for building native modules
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git ca-certificates curl build-essential python3 python3-dev python3-pip make g++ pkg-config \
     libvips-dev ffmpeg libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/*
 
-# Yarn setup (use Yarn Berry, node-modules linker)
+# Yarn setup (corepack + pinned Yarn Berry)
 RUN npm install -g corepack && corepack enable
 RUN yarn set version 3.6.3
 
-# Ensure Yarn uses node_modules layout (avoid PnP surprises)
+# Ensure Yarn uses node_modules (avoid PnP surprises)
 RUN printf '%s\n' 'nodeLinker: "node-modules"' > /git/.yarnrc.yml
 
-# Install dependencies (Yarn v3 compatible)
-RUN yarn install --frozen-lockfile --inline-builds --network-concurrency 4
+# Install dependencies (Yarn v3 compatible). inline-builds allows native build scripts to run.
+RUN yarn install --frozen-lockfile --inline-builds
 
-# Replace any real ioredis in node_modules with a safe no-op stub (prevents network connects)
+# Replace any ioredis installed with a no-op stub to prevent network connections
 RUN rm -rf node_modules/ioredis || true && mkdir -p node_modules/ioredis
-
 RUN cat > node_modules/ioredis/index.js <<'JS'
 /**
- * ioredis stub to prevent network connections during runtime.
- * Provides commonly used methods used by WAHA code but performs no I/O.
+ * Minimal ioredis stub used to disable Redis connections completely.
+ * Exports a class with commonly used methods (on, disconnect, quit, get, set, etc.)
+ * so code that expects a Redis instance won't crash, but no network I/O happens.
  */
 module.exports = class Redis {
-  constructor(){ this.isStub=true; }
+  constructor(){ this.isStub = true; }
   on(){ return this; }
   once(){ return this; }
   off(){ return this; }
@@ -60,23 +60,20 @@ module.exports = class Redis {
 };
 JS
 
-# Copy the full source (after dependencies are installed so build cache is effective)
+# Copy full source (after deps installed so cache is effective) and ensure build-time installs are up to date
 COPY . /git
+RUN yarn install --frozen-lockfile --inline-builds || true
 
-# Ensure workspace/install scripts run if needed (safe no-op if nothing)
-RUN yarn install --frozen-lockfile --inline-builds --network-concurrency 4
-
-# Build WAHA (core-only) and remove TS declaration files
+# Build WAHA (core-only)
 RUN yarn build && find ./dist -name "*.d.ts" -delete
 
-# Safety grep (prints occurrences if any ioredis left in built files)
+# Diagnostic (won't break build) — prints if ioredis remains referenced in dist
 RUN if grep -R --line-number "ioredis" ./dist 2>/dev/null | grep -q .; then \
-      echo "WARNING: ioredis references found in dist:"; \
-      grep -R --line-number "ioredis" ./dist || true; \
+      echo "WARNING: ioredis references found in dist:"; grep -R --line-number "ioredis" ./dist || true; \
     else echo "OK: no ioredis references in dist"; fi
 
 #
-# Dashboard stage (unchanged)
+# Dashboard stage
 #
 FROM node:${NODE_IMAGE_TAG} AS dashboard
 RUN apt-get update && apt-get install -y jq wget unzip && rm -rf /var/lib/apt/lists/*
@@ -92,7 +89,7 @@ RUN \
   && rm -rf /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}
 
 #
-# GOWS stage (unchanged)
+# GOWS stage
 #
 FROM golang:${GOLANG_IMAGE_TAG} AS gows
 RUN apt-get update && apt-get install -y jq protobuf-compiler libvips-dev && rm -rf /var/lib/apt/lists/*
@@ -108,7 +105,7 @@ RUN \
   chmod +x /go/gows/bin/gows
 
 #
-# Final runtime stage
+# Final runtime image — copy prepared node_modules + dist (no Redis attempts)
 #
 FROM node:${NODE_IMAGE_TAG} AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
@@ -132,7 +129,7 @@ ENV WAHA_DISABLE_REDIS=true
 ENV DB_TYPE=sqlite
 ENV DB_SQLITE_FILENAME=/app/sessions.db
 
-# Install runtime packages needed for headless chromium + ffmpeg (kept minimal)
+# Install runtime packages needed for headless Chromium + ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libvips zip unzip wget ca-certificates tini \
     xvfb xauth libc6 libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 \
@@ -140,7 +137,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Copy built artifacts from build stage
+# Copy prepared artifacts from build stage
+COPY --from=build /git/node_modules ./node_modules
+COPY --from=build /git/dist ./dist
+
+# Attach dashboard and GOWS
+COPY --from=dashboard /dashboard ./dist/dashboard
+COPY --from=gows /go/gows/bin/gows /app/gows
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+# Ensure entrypoint exists if present in repo; make executable
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh || true
+
+# Chokidar options
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+# Expose port and run
+EXPOSE 3000
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]# Copy built artifacts from build stage
 COPY --from=build /git/node_modules ./node_modules
 COPY --from=build /git/dist ./dist
 
