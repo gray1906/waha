@@ -79,32 +79,73 @@ RUN \
     chmod +x /go/gows/bin/gows
 
 #
-# Final (Core image, no Redis)
+# Final Stage
 #
-FROM devlikeapro/waha AS release
-
-# Runtime env
+FROM node:${NODE_IMAGE_TAG} AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 ENV NODE_OPTIONS="--max-old-space-size=16384"
 ARG USE_BROWSER=chromium
 ARG WHATSAPP_DEFAULT_ENGINE
 
-# Core-only WAHA flags to disable Redis
-ENV WAHA_CORE_ONLY=true
-ENV WAHA_REDIS_ENABLED=false
-ENV WAHA_DISABLE_REDIS=true
+RUN echo "USE_BROWSER=$USE_BROWSER"
 
 # Puppeteer / Chromium flags
 ENV WA_PUPPETEER_HEADLESS=true
 ENV WA_PUPPETEER_SANDBOX=false
 ENV WA_PUPPETEER_SLOW_MO=50
 
+# Core-only WAHA flags to disable Redis
+ENV WAHA_CORE_ONLY=true
+ENV WAHA_REDIS_ENABLED=false
+ENV WAHA_DISABLE_REDIS=true
+
 # Optional DB envs (sqlite)
 ENV DB_TYPE=sqlite
 ENV DB_SQLITE_FILENAME=/app/sessions.db
 
-# Attach your GOWS and Dashboard if needed
+# Attach GOWS
 WORKDIR /app
+COPY --from=gows /go/gows/bin/gows /app/gows
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+# Attach Dashboard
+COPY --from=dashboard /dashboard ./dist/dashboard
+
+# --- Redis stub: prevent any real ioredis from connecting ---
+RUN mkdir -p /app/node_modules/ioredis \
+ && cat > /app/node_modules/ioredis/index.js <<'JS'
+module.exports = class Redis {
+  constructor() { this.isStub = true; }
+  on() { return this; }
+  once() { return this; }
+  off() { return this; }
+  quit(cb) { if(typeof cb==='function') cb(null,'OK'); return Promise.resolve('OK'); }
+  disconnect() { return; }
+  get() { return Promise.resolve(null); }
+  set() { return Promise.resolve('OK'); }
+  del() { return Promise.resolve(0); }
+  publish() { return Promise.resolve(0); }
+  subscribe() { return; }
+  unsubscribe() { return; }
+  multi() { return this; }
+  exec() { return Promise.resolve([]); }
+};
+JS
+
+# Chokidar options to monitor file changes
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+# Expose port
+EXPOSE 3000
+
+# Entrypoint
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]WORKDIR /app
 COPY --from=gows /go/gows/bin/gows /app/gows
 ENV WAHA_GOWS_PATH=/app/gows
 ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
