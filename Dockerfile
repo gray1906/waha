@@ -81,7 +81,7 @@ RUN \
 #
 # Final (Core image, no Redis)
 #
-FROM devlikeapro/waha:core AS release
+FROM devlikeapro/waha AS release
 
 # Runtime env
 ENV PUPPETEER_SKIP_DOWNLOAD=True
@@ -105,6 +105,22 @@ ENV DB_SQLITE_FILENAME=/app/sessions.db
 
 # Attach your GOWS and Dashboard if needed
 WORKDIR /app
+COPY --from=gows /go/gows/bin/gows /app/gows
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+COPY --from=dashboard /dashboard ./dist/dashboard
+
+# Chokidar options to monitor file changes
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+EXPOSE 3000
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]WORKDIR /app
 COPY --from=gows /go/gows/bin/gows /app/gows
 ENV WAHA_GOWS_PATH=/app/gows
 ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
