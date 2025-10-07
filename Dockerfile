@@ -2,7 +2,6 @@ ARG NODE_IMAGE_TAG=22.16-bookworm-slim
 ARG GOLANG_IMAGE_TAG=1.23-bookworm
 
 # Build stage: prepare node_modules (with ioredis stub) and build core-only dist
-
 FROM node:${NODE_IMAGE_TAG} AS build
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 
@@ -120,6 +119,19 @@ module.exports.Redis = Redis;
 module.exports.Cluster = Redis;
 module.exports.Command = class Command {};
 module.exports.ReplyError = class ReplyError extends Error {};
+JS
+
+# 🧩 Add stub for ioredis/built/utils (required by BullMQ)
+RUN mkdir -p node_modules/ioredis/built && \
+    cat > node_modules/ioredis/built/utils.js <<'JS'
+/**
+ * Stub for ioredis/built/utils used by BullMQ.
+ * Prevents module not found errors when BullMQ tries to import it.
+ */
+module.exports = {
+  parseURL: () => ({}),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms || 0)),
+};
 JS
 
 # Create stubs for other Redis client packages
