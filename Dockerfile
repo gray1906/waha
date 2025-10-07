@@ -1,9 +1,9 @@
-# === WAHA Dockerfile — robust build with Yarn v3 fixes + ioredis stub ===
+# === WAHA Dockerfile — corrected (no unterminated heredoc) ===
 ARG NODE_IMAGE_TAG=22.16-bookworm-slim
 ARG GOLANG_IMAGE_TAG=1.23-bookworm
 
 #
-# Build stage: install deps, force core-only build, prepare node_modules with stub
+# Build stage
 #
 FROM node:${NODE_IMAGE_TAG} AS build
 ENV PUPPETEER_SKIP_DOWNLOAD=True
@@ -15,7 +15,7 @@ ENV WAHA_DISABLE_REDIS=true
 
 WORKDIR /git
 
-# copy package manifests first (cache-friendlier)
+# copy package manifests first (cache-friendly)
 COPY package.json yarn.lock ./
 
 # install system build tools needed for native modules
@@ -27,21 +27,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Yarn setup (use Yarn Berry, node-modules linker)
 RUN npm install -g corepack && corepack enable
 RUN yarn set version 3.6.3
-# Ensure Yarn uses node_modules (many projects expect node_modules layout)
-RUN mkdir -p /git && \
-    cat > /git/.yarnrc.yml <<'YARNRC' \
-nodeLinker: "node-modules" \
-YARNRC
 
-# Install dependencies (Yarn v3 compatible; inline-builds for native build scripts)
+# Ensure Yarn uses node_modules layout (avoid PnP surprises)
+RUN printf '%s\n' 'nodeLinker: "node-modules"' > /git/.yarnrc.yml
+
+# Install dependencies (Yarn v3 compatible)
 RUN yarn install --frozen-lockfile --inline-builds --network-concurrency 4
 
 # Replace any real ioredis in node_modules with a safe no-op stub (prevents network connects)
-RUN rm -rf node_modules/ioredis || true \
- && mkdir -p node_modules/ioredis \
- && cat > node_modules/ioredis/index.js <<'JS' \
+RUN rm -rf node_modules/ioredis || true && mkdir -p node_modules/ioredis
+
+RUN cat > node_modules/ioredis/index.js <<'JS'
 /**
  * ioredis stub to prevent network connections during runtime.
+ * Provides commonly used methods used by WAHA code but performs no I/O.
  */
 module.exports = class Redis {
   constructor(){ this.isStub=true; }
@@ -61,15 +60,16 @@ module.exports = class Redis {
 };
 JS
 
-# Copy the full source & install any build-time deps required by build scripts
+# Copy the full source (after dependencies are installed so build cache is effective)
 COPY . /git
-# ensure any workspace installs run if necessary
+
+# Ensure workspace/install scripts run if needed (safe no-op if nothing)
 RUN yarn install --frozen-lockfile --inline-builds --network-concurrency 4
 
-# Build WAHA (core-only)
+# Build WAHA (core-only) and remove TS declaration files
 RUN yarn build && find ./dist -name "*.d.ts" -delete
 
-# Safety grep (prints occurrences if any ioredis left in built files; helpful for debugging)
+# Safety grep (prints occurrences if any ioredis left in built files)
 RUN if grep -R --line-number "ioredis" ./dist 2>/dev/null | grep -q .; then \
       echo "WARNING: ioredis references found in dist:"; \
       grep -R --line-number "ioredis" ./dist || true; \
@@ -105,6 +105,65 @@ RUN \
   if [ "$ARCH" = "x86_64" ]; then ARCH="amd64"; elif [ "$ARCH" = "aarch64" ]; then ARCH="arm64"; else echo "Unsupported architecture: $ARCH" && exit 1; fi && \
   mkdir -p /go/gows/bin && \
   wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
+  chmod +x /go/gows/bin/gows
+
+#
+# Final runtime stage
+#
+FROM node:${NODE_IMAGE_TAG} AS release
+ENV PUPPETEER_SKIP_DOWNLOAD=True
+ENV NODE_OPTIONS="--max-old-space-size=16384"
+ARG USE_BROWSER=chromium
+ARG WHATSAPP_DEFAULT_ENGINE
+
+RUN echo "USE_BROWSER=$USE_BROWSER"
+
+# Puppeteer / Chromium flags
+ENV WA_PUPPETEER_HEADLESS=true
+ENV WA_PUPPETEER_SANDBOX=false
+ENV WA_PUPPETEER_SLOW_MO=50
+
+# WAHA runtime safety flags
+ENV WAHA_CORE_ONLY=true
+ENV WAHA_REDIS_ENABLED=false
+ENV WAHA_DISABLE_REDIS=true
+
+# DB (sqlite)
+ENV DB_TYPE=sqlite
+ENV DB_SQLITE_FILENAME=/app/sessions.db
+
+# Install runtime packages needed for headless chromium + ffmpeg (kept minimal)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libvips zip unzip wget ca-certificates tini \
+    xvfb xauth libc6 libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 \
+  && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy built artifacts from build stage
+COPY --from=build /git/node_modules ./node_modules
+COPY --from=build /git/dist ./dist
+
+# attach dashboard and GOWS
+COPY --from=dashboard /dashboard ./dist/dashboard
+COPY --from=gows /go/gows/bin/gows /app/gows
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+# Ensure entrypoint exists if present in repo; make executable
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh || true
+
+# Chokidar options
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+EXPOSE 3000
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]  wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
   chmod +x /go/gows/bin/gows
 
 #
