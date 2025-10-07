@@ -1,5 +1,3 @@
-=== WAHA Dockerfile — robust, Yarn v3 compatible, Redis stub, core-only build ===
-
 ARG NODE_IMAGE_TAG=22.16-bookworm-slim
 ARG GOLANG_IMAGE_TAG=1.23-bookworm
 
