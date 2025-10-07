@@ -133,6 +133,55 @@ module.exports = class Redis {
 };
 JS
 
+# ------------------ NEW: ensure entrypoint exists & git is available ------------------
+# Copy the project's entrypoint script into the final image (if present in repo)
+# and make it executable. Some WAHA entrypoints expect git; install git to avoid fatal 128.
+# If you already have an entrypoint in the base image, this copy will overwrite it with your repo one.
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+ && apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Chokidar options to monitor file changes
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+# Expose port
+EXPOSE 3000
+
+# Entrypoint
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/entrypoint.sh"]WORKDIR /app
+COPY --from=gows /go/gows/bin/gows /app/gows
+ENV WAHA_GOWS_PATH=/app/gows
+ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+# Attach Dashboard
+COPY --from=dashboard /dashboard ./dist/dashboard
+
+# --- Redis stub: prevent any real ioredis from connecting ---
+RUN mkdir -p /app/node_modules/ioredis \
+ && cat > /app/node_modules/ioredis/index.js <<'JS'
+module.exports = class Redis {
+  constructor() { this.isStub = true; }
+  on() { return this; }
+  once() { return this; }
+  off() { return this; }
+  quit(cb) { if(typeof cb==='function') cb(null,'OK'); return Promise.resolve('OK'); }
+  disconnect() { return; }
+  get() { return Promise.resolve(null); }
+  set() { return Promise.resolve('OK'); }
+  del() { return Promise.resolve(0); }
+  publish() { return Promise.resolve(0); }
+  subscribe() { return; }
+  unsubscribe() { return; }
+  multi() { return this; }
+  exec() { return Promise.resolve([]); }
+};
+JS
+
 # Chokidar options to monitor file changes
 ENV CHOKIDAR_USEPOLLING=1
 ENV CHOKIDAR_INTERVAL=5000
