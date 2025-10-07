@@ -31,17 +31,17 @@ RUN printf '%s\n' 'nodeLinker: "node-modules"' > /git/.yarnrc.yml
 # Install dependencies (Yarn v3 compatible). inline-builds allows native build scripts to run.
 RUN yarn install --frozen-lockfile --inline-builds
 
-# COMPREHENSIVE REDIS STUBBING
+# COMPREHENSIVE REDIS STUBBING - Replace ioredis and related Redis dependencies with stubs
 RUN rm -rf node_modules/ioredis node_modules/redis node_modules/@node-redis && \
     mkdir -p node_modules/ioredis node_modules/redis node_modules/@node-redis
 
-# ioredis stub
+# Create comprehensive ioredis stub
 RUN cat > node_modules/ioredis/index.js <<'JS'
 class Redis {
   constructor(options) { this.options = options; this.status = 'close'; this.isStub = true; }
   connect() { return Promise.resolve(this); }
   disconnect() { this.status='close'; return this; }
-  quit() { this.status='close'; return Promise.resolve('OK'); }
+  quit() { return Promise.resolve('OK'); }
   on() { return this; }
   once() { return this; }
   off() { return this; }
@@ -86,7 +86,7 @@ module.exports.Command=class Command{};
 module.exports.ReplyError=class ReplyError extends Error{};
 JS
 
-# ioredis utils stub
+# Add stub for ioredis/built/utils (required by BullMQ)
 RUN mkdir -p node_modules/ioredis/built && \
     cat > node_modules/ioredis/built/utils.js <<'JS'
 module.exports = {
@@ -95,7 +95,7 @@ module.exports = {
 };
 JS
 
-# redis stubs
+# Stubs for other Redis packages
 RUN cat > node_modules/redis/index.js <<'JS'
 module.exports = {
   createClient: () => ({
@@ -122,7 +122,7 @@ module.exports = {
 };
 JS
 
-# NestJS Redis module stub
+# Stub NestJS Redis module
 RUN mkdir -p node_modules/@liaoliaots/nestjs-redis && \
     cat > node_modules/@liaoliaots/nestjs-redis/dist/index.js <<'JS'
 exports.RedisModule={forRoot:()=>({module:class RedisModuleStub{}}),forRootAsync:()=>({module:class RedisModuleStubAsync{}})};
@@ -130,72 +130,33 @@ exports.RedisService=class RedisServiceStub{};
 exports.InjectRedis=()=>()=>{};
 JS
 
-# RMutexService stub
-RUN mkdir -p node_modules/@waha/core/src/common/rmutex && \
-    cat > node_modules/@waha/core/src/common/rmutex/index.ts <<'TS'
-export class RMutexService {
-  constructor(private readonly options: any, private readonly logger: any, private readonly ttl: number) {
-    console.log('RMutexService STUB: Distributed locking disabled');
-  }
-  async acquireLock(resource: string): Promise<boolean> { return true; }
-  async releaseLock(resource: string): Promise<boolean> { return true; }
-  async withLock<T>(resource: string, fn: () => Promise<T>): Promise<T> { return await fn(); }
-}
-export const RMutexModule = {
-  forRoot: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] }),
-  forRootAsync: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] })
-};
-TS
-
-# precompiled backup
+# 🧩 CRITICAL: Stub RMutexService properly (self-contained, no DI)
 RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
     cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
 class RMutexService {
-  constructor(options, logger, ttl) { this.options=options; this.logger=logger; this.ttl=ttl; console.log('RMutexService STUB: Distributed locking disabled'); }
-  async acquireLock(resource){return true;}
-  async releaseLock(resource){return true;}
-  async withLock(resource,fn){return fn();}
+  constructor() {
+    console.log('RMutexService STUB: Distributed locking disabled');
+  }
+  async acquireLock(resource){ return true; }
+  async releaseLock(resource){ return true; }
+  async withLock(resource, fn){ return await fn(); }
 }
 const RMutexModule={
-  forRoot:()=>({module:class RMutexModule{}, providers:[{provide:RMutexService,useFactory:(o,l,t)=>new RMutexService(o,l,t),inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']}],exports:[RMutexService]}),
-  forRootAsync:()=>({module:class RMutexModuleAsync{}, providers:[{provide:RMutexService,useFactory:(o,l,t)=>new RMutexService(o,l,t),inject:['RMUTEX_OPTIONS','PinoLogger:RMutexService','RMUTEX_DEFAULT_TTL']}],exports:[RMutexService]})
+  forRoot:()=>({module:class {}, providers:[RMutexService], exports:[RMutexService]}),
+  forRootAsync:()=>({module:class {}, providers:[RMutexService], exports:[RMutexService]})
 };
 exports.RMutexService=RMutexService;
 exports.RMutexModule=RMutexModule;
 JS
 
-# Main @waha/core entry point
-RUN cat > node_modules/@waha/core/index.js <<'JS'
-module.exports = require('./dist/common/rmutex');
-JS
-
 # Copy full source
 COPY . /git
-
-# Override project RMutex source
-RUN if [ -d "/git/packages/core/src/common/rmutex" ]; then \
-      echo "Overriding real RMutex source with stub..."; \
-      mkdir -p /git/packages/core/src/common/rmutex; \
-      cat > /git/packages/core/src/common/rmutex/index.ts <<'EOF'
-export class RMutexService {
-  constructor(options: any, logger: any, ttl: number) { console.log('RMutexService PROJECT STUB: Distributed locking disabled'); }
-  async acquireLock(resource: string): Promise<boolean> { return true; }
-  async releaseLock(resource: string): Promise<boolean> { return true; }
-  async withLock<T>(resource: string, fn: () => Promise<T>): Promise<T> { return await fn(); }
-}
-export const RMutexModule = {
-  forRoot: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] }),
-  forRootAsync: () => ({ module: class {}, providers: [{ provide: 'RMutexService', useClass: RMutexService }], exports: ['RMutexService'] })
-};
-EOF
-  fi
-
 RUN yarn install --frozen-lockfile --inline-builds || true
 
 # Build WAHA (core-only)
 RUN yarn build && find ./dist -name "*.d.ts" -delete
 
-# Redis diagnostics
+# Check for Redis references
 RUN echo "=== Checking for problematic Redis references ===" && \
     if find ./dist -name "*.js" -exec grep -l "ioredis\|@liaoliaots/nestjs-redis\|redis" {} \; 2>/dev/null | grep -q .; then \
         echo "WARNING: Redis references found in dist:"; \
@@ -217,8 +178,9 @@ RUN \
     wget https://github.com/${WAHA_DASHBOARD_GITHUB_REPO}/archive/${WAHA_DASHBOARD_SHA}.zip \
     && unzip ${WAHA_DASHBOARD_SHA}.zip -d /tmp/dashboard \
     && mkdir -p /dashboard \
-    && mv /tmp/dashboard/* /dashboard/ \
-    && rm -rf ${WAHA_DASHBOARD_SHA}.zip /tmp/dashboard
+    && mv /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}/* /dashboard/ \
+    && rm -rf ${WAHA_DASHBOARD_SHA}.zip \
+    && rm -rf /tmp/dashboard/dashboard-${WAHA_DASHBOARD_SHA}
 
 # GOWS stage
 FROM golang:${GOLANG_IMAGE_TAG} AS gows
@@ -234,35 +196,58 @@ RUN \
     wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
     chmod +x /go/gows/bin/gows
 
-# Final runtime image
+# Final runtime image — copy prepared node_modules + dist
 FROM node:${NODE_IMAGE_TAG} AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 ENV NODE_OPTIONS="--max-old-space-size=16384"
 ARG USE_BROWSER=chromium
+ARG WHATSAPP_DEFAULT_ENGINE
+RUN echo "USE_BROWSER=$USE_BROWSER"
+
+# Puppeteer / Chromium flags
 ENV WA_PUPPETEER_HEADLESS=true
 ENV WA_PUPPETEER_SANDBOX=false
 ENV WA_PUPPETEER_SLOW_MO=50
+
+# WAHA runtime safety flags
 ENV WAHA_CORE_ONLY=true
 ENV WAHA_REDIS_ENABLED=false
 ENV WAHA_DISABLE_REDIS=true
+
+# DB (sqlite)
 ENV DB_TYPE=sqlite
 ENV DB_SQLITE_FILENAME=/app/sessions.db
-ENV CHOKIDAR_USEPOLLING=1
-ENV CHOKIDAR_INTERVAL=5000
-ENV WAHA_ZIPPER=ZIPUNZIP
-WORKDIR /app
+
+# Install runtime packages needed for headless Chromium + ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libvips zip unzip wget ca-certificates tini \
     xvfb xauth libc6 libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 \
     && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy prepared artifacts from build stage
 COPY --from=build /git/node_modules ./node_modules
 COPY --from=build /git/dist ./dist
+
+# Attach dashboard and GOWS
 COPY --from=dashboard /dashboard ./dist/dashboard
 COPY --from=gows /go/gows/bin/gows /app/gows
 ENV WAHA_GOWS_PATH=/app/gows
 ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
+
+# Ensure entrypoint exists if present in repo; make executable
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh || true
+
+# Chokidar options
+ENV CHOKIDAR_USEPOLLING=1
+ENV CHOKIDAR_INTERVAL=5000
+
+# WAHA variables
+ENV WAHA_ZIPPER=ZIPUNZIP
+
+# Expose port and run
 EXPOSE 3000
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/entrypoint.sh"]
