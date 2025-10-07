@@ -28,14 +28,14 @@ RUN yarn set version 3.6.3
 # Ensure Yarn uses node_modules (avoid PnP surprises)
 RUN printf '%s\n' 'nodeLinker: "node-modules"' > /git/.yarnrc.yml
 
-# Install dependencies (Yarn v3 compatible). inline-builds allows native build scripts to run.
+# Install dependencies (Yarn v3 compatible)
 RUN yarn install --frozen-lockfile --inline-builds
 
-# COMPREHENSIVE REDIS STUBBING - Replace ioredis and related Redis dependencies with stubs
+# COMPREHENSIVE REDIS STUBBING
 RUN rm -rf node_modules/ioredis node_modules/redis node_modules/@node-redis && \
     mkdir -p node_modules/ioredis node_modules/redis node_modules/@node-redis
 
-# Create comprehensive ioredis stub
+# ioredis stub
 RUN cat > node_modules/ioredis/index.js <<'JS'
 class Redis {
   constructor(options) { this.options = options; this.status = 'close'; this.isStub = true; }
@@ -86,7 +86,7 @@ module.exports.Command=class Command{};
 module.exports.ReplyError=class ReplyError extends Error{};
 JS
 
-# Add stub for ioredis/built/utils (required by BullMQ)
+# ioredis/built/utils stub
 RUN mkdir -p node_modules/ioredis/built && \
     cat > node_modules/ioredis/built/utils.js <<'JS'
 module.exports = {
@@ -95,7 +95,7 @@ module.exports = {
 };
 JS
 
-# Stubs for other Redis packages
+# redis stub
 RUN cat > node_modules/redis/index.js <<'JS'
 module.exports = {
   createClient: () => ({
@@ -109,6 +109,7 @@ module.exports = {
 };
 JS
 
+# @node-redis/client stub
 RUN mkdir -p node_modules/@node-redis/client && \
     cat > node_modules/@node-redis/client/index.js <<'JS'
 module.exports = {
@@ -122,7 +123,7 @@ module.exports = {
 };
 JS
 
-# Stub NestJS Redis module
+# NestJS Redis module stub
 RUN mkdir -p node_modules/@liaoliaots/nestjs-redis && \
     cat > node_modules/@liaoliaots/nestjs-redis/dist/index.js <<'JS'
 exports.RedisModule={forRoot:()=>({module:class RedisModuleStub{}}),forRootAsync:()=>({module:class RedisModuleStubAsync{}})};
@@ -130,33 +131,39 @@ exports.RedisService=class RedisServiceStub{};
 exports.InjectRedis=()=>()=>{};
 JS
 
-# 🧩 CRITICAL: Stub RMutexService properly (self-contained, no DI)
+# RMutexService stub with 3 parameters
 RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
     cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
 class RMutexService {
-  constructor() {
+  constructor(redisClient, logger, timeout) {
+    this.redisClient = redisClient;
+    this.logger = logger;
+    this.timeout = timeout;
     console.log('RMutexService STUB: Distributed locking disabled');
   }
+
   async acquireLock(resource){ return true; }
   async releaseLock(resource){ return true; }
   async withLock(resource, fn){ return await fn(); }
 }
-const RMutexModule={
-  forRoot:()=>({module:class {}, providers:[RMutexService], exports:[RMutexService]}),
-  forRootAsync:()=>({module:class {}, providers:[RMutexService], exports:[RMutexService]})
+
+const RMutexModule = {
+  forRoot: () => ({ module: class {}, providers: [RMutexService], exports: [RMutexService] }),
+  forRootAsync: () => ({ module: class {}, providers: [RMutexService], exports: [RMutexService] }),
 };
-exports.RMutexService=RMutexService;
-exports.RMutexModule=RMutexModule;
+
+exports.RMutexService = RMutexService;
+exports.RMutexModule = RMutexModule;
 JS
 
-# Copy full source
+# Copy full source and ensure build-time installs are up to date
 COPY . /git
 RUN yarn install --frozen-lockfile --inline-builds || true
 
 # Build WAHA (core-only)
 RUN yarn build && find ./dist -name "*.d.ts" -delete
 
-# Check for Redis references
+# Diagnostic for Redis references
 RUN echo "=== Checking for problematic Redis references ===" && \
     if find ./dist -name "*.js" -exec grep -l "ioredis\|@liaoliaots/nestjs-redis\|redis" {} \; 2>/dev/null | grep -q .; then \
         echo "WARNING: Redis references found in dist:"; \
@@ -196,7 +203,7 @@ RUN \
     wget -O /go/gows/bin/gows https://github.com/${GOWS_GITHUB_REPO}/releases/download/${GOWS_SHA}/gows-${ARCH} && \
     chmod +x /go/gows/bin/gows
 
-# Final runtime image — copy prepared node_modules + dist
+# Final runtime image
 FROM node:${NODE_IMAGE_TAG} AS release
 ENV PUPPETEER_SKIP_DOWNLOAD=True
 ENV NODE_OPTIONS="--max-old-space-size=16384"
@@ -236,7 +243,7 @@ COPY --from=gows /go/gows/bin/gows /app/gows
 ENV WAHA_GOWS_PATH=/app/gows
 ENV WAHA_GOWS_SOCKET=/tmp/gows.sock
 
-# Ensure entrypoint exists if present in repo; make executable
+# Ensure entrypoint exists
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh || true
 
