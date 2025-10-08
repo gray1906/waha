@@ -44,7 +44,14 @@ JS
 
 RUN mkdir -p node_modules/@liaoliaots/nestjs-redis && \
     cat > node_modules/@liaoliaots/nestjs-redis/dist/index.js <<'JS'
-// nestjs-redis stub code
+exports.RedisModule = {
+  forRoot: () => ({ module: class RedisModuleStub {} }),
+  forRootAsync: () => ({ module: class RedisModuleStubAsync {} })
+};
+exports.RedisService = class RedisServiceStub {};
+exports.InjectRedis = function InjectRedis() {
+  return function (target, key, index) {};
+};
 JS
 
 RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
