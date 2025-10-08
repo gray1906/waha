@@ -13,8 +13,7 @@ COPY package.json yarn.lock ./
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git ca-certificates curl build-essential python3 python3-dev python3-pip make g++ pkg-config \
-    libvips-dev ffmpeg libglib2.0-0 \
-    && rm -rf /var/lib/apt/lists/*
+    libvips-dev ffmpeg libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g corepack && corepack enable
 RUN yarn set version 3.6.3
@@ -44,19 +43,55 @@ JS
 
 RUN mkdir -p node_modules/@liaoliaots/nestjs-redis && \
     cat > node_modules/@liaoliaots/nestjs-redis/dist/index.js <<'JS'
+const { Inject } = require('@nestjs/common');
 exports.RedisModule = {
   forRoot: () => ({ module: class RedisModuleStub {} }),
   forRootAsync: () => ({ module: class RedisModuleStubAsync {} })
 };
 exports.RedisService = class RedisServiceStub {};
-exports.InjectRedis = function InjectRedis() {
-  return function (target, key, index) {};
-};
+exports.InjectRedis = () => Inject('RedisClient');
 JS
 
 RUN mkdir -p node_modules/@waha/core/dist/common/rmutex && \
     cat > node_modules/@waha/core/dist/common/rmutex/index.js <<'JS'
-// RMutexService stub with RedisClient provider
+class RMutexService {
+  constructor(redisClient = null, logger = null, timeout = 0) {
+    this.redisClient = redisClient;
+    this.logger = logger;
+    this.timeout = timeout;
+    console.log('RMutexService STUB: Distributed locking disabled');
+  }
+
+  async acquireLock(resource) { return true; }
+  async releaseLock(resource) { return true; }
+  async withLock(resource, fn) { return await fn(); }
+}
+
+const redisClientStub = {
+  provide: 'RedisClient',
+  useValue: {
+    connect: () => Promise.resolve(),
+    quit: () => Promise.resolve(),
+    get: () => Promise.resolve(null),
+    set: () => Promise.resolve('OK'),
+  },
+};
+
+const RMutexModule = {
+  forRoot: () => ({
+    module: class {},
+    providers: [redisClientStub, RMutexService],
+    exports: [RMutexService],
+  }),
+  forRootAsync: () => ({
+    module: class {},
+    providers: [redisClientStub, RMutexService],
+    exports: [RMutexService],
+  }),
+};
+
+exports.RMutexService = RMutexService;
+exports.RMutexModule = RMutexModule;
 JS
 
 COPY . /git
@@ -118,8 +153,8 @@ ENV DB_SQLITE_FILENAME=/app/sessions.db
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libvips zip unzip wget ca-certificates tini \
-    xvfb xauth libc6 libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 \
-    && rm -rf /var/lib/apt/lists/*
+    xvfb xauth libc6 libnss3 libxss1 libasound2 libatk-bridge2.0-0 libgtk-3-0 libdrm2 && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
